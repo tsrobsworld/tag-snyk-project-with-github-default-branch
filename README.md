@@ -284,5 +284,3 @@ For issues and questions:
 3. Open an issue with error log contents and command used
 
 ---
-
-**Built with ❤️ for Snyk project management automation** 
