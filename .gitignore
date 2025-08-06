@@ -1,0 +1,6 @@
+# Python
+__pycache__/
+branch-tagging-py-env/
+
+# Logs
+*.log
