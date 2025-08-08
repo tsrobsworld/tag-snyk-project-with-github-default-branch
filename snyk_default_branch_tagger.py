@@ -343,7 +343,9 @@ class GithubAPI:
         self.session = requests.Session()
         self.session.headers.update({
             'Authorization': f'token {token}',
-            'Accept': 'application/vnd.github.v3+json'
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'snyk-default-branch-tagger/1.0',
+            'X-GitHub-Api-Version': '2022-11-28'
         })
         # Store details of the last error for external consumers (e.g., error logger)
         self.last_error_details: Optional[Dict] = None
@@ -357,6 +359,22 @@ class GithubAPI:
             print(f"   ❌ GitHub API error (status {status}) for {details.get('url')}: {str(msg)[:500]}")
         else:
             print(f"   ❌ GitHub API error for {details.get('url')}: {str(msg)[:500]}")
+
+    def _build_repo_url(self, owner: str, repo: str, force_api_v3_suffix: bool = False) -> str:
+        """Build the repo API URL, optionally forcing /api/v3 suffix for GHE instances."""
+        if self.base_url.endswith('/api/v3') or self.base_url.endswith('/api/v3/'):
+            return f"{self.base_url}/repos/{owner}/{repo}"
+        if force_api_v3_suffix and 'api.github.com' not in self.base_url:
+            return f"{self.base_url}/api/v3/repos/{owner}/{repo}"
+        return f"{self.base_url}/repos/{owner}/{repo}"
+
+    def _get_with_optional_accept(self, url: str, alt_accept: Optional[str] = None) -> requests.Response:
+        """Perform GET, optionally overriding Accept for this request only."""
+        if alt_accept is None:
+            return self.session.get(url)
+        # Do not mutate session headers globally
+        headers = {**self.session.headers, 'Accept': alt_accept}
+        return self.session.get(url, headers=headers)
     
     def extract_repo_info_from_url(self, url: str) -> Optional[Dict[str, str]]:
         """
@@ -410,17 +428,21 @@ class GithubAPI:
         Returns:
             Default branch name or None if failed
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}"
-        
+        # Attempt 1: normal URL and standard Accept
+        url = self._build_repo_url(owner, repo)
         try:
-            response = self.session.get(url)
-            # Capture non-200 responses with details without raising first
-            if response.status_code != 200:
+            response = self._get_with_optional_accept(url)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('default_branch')
+            # If 406/415, retry with vendor+json Accept
+            if response.status_code in (406, 415):
                 details = {
                     'status_code': response.status_code,
                     'url': url,
                     'owner': owner,
                     'repo': repo,
+                    'note': 'Retrying with application/vnd.github+json'
                 }
                 try:
                     details['response_text'] = response.text
@@ -428,24 +450,57 @@ class GithubAPI:
                 except Exception:
                     pass
                 self._record_github_error(details)
-                return None
-            data = response.json()
-            return data.get('default_branch')
-        except requests.exceptions.HTTPError as e:
-            details = {
-                'exception': type(e).__name__,
-                'message': str(e),
-                'url': url,
-                'owner': owner,
-                'repo': repo,
-            }
-            if getattr(e, 'response', None) is not None:
-                details['status_code'] = e.response.status_code
+                alt = self._get_with_optional_accept(url, 'application/vnd.github+json')
+                if alt.status_code == 200:
+                    return alt.json().get('default_branch')
+                # If still 406 on GHE without /api/v3, try once with /api/v3
+                if alt.status_code == 406 and 'api.github.com' not in self.base_url:
+                    url_v3 = self._build_repo_url(owner, repo, force_api_v3_suffix=True)
+                    alt2 = self._get_with_optional_accept(url_v3, 'application/vnd.github+json')
+                    if alt2.status_code == 200:
+                        return alt2.json().get('default_branch')
+                    # record final failure
+                    details2 = {
+                        'status_code': alt2.status_code,
+                        'url': url_v3,
+                        'owner': owner,
+                        'repo': repo,
+                        'note': 'Fallback /api/v3 with application/vnd.github+json failed'
+                    }
+                    try:
+                        details2['response_text'] = alt2.text
+                        details2['headers'] = dict(alt2.headers)
+                    except Exception:
+                        pass
+                    self._record_github_error(details2)
+                    return None
+                # record alt failure
+                details_alt = {
+                    'status_code': alt.status_code,
+                    'url': url,
+                    'owner': owner,
+                    'repo': repo,
+                    'note': 'application/vnd.github+json fallback failed'
+                }
                 try:
-                    details['response_text'] = e.response.text
-                    details['headers'] = dict(e.response.headers)
+                    details_alt['response_text'] = alt.text
+                    details_alt['headers'] = dict(alt.headers)
                 except Exception:
                     pass
+                self._record_github_error(details_alt)
+                return None
+            # Non-200 other error: record and return None
+            details = {
+                'status_code': response.status_code,
+                'url': url,
+                'owner': owner,
+                'repo': repo
+            }
+            try:
+                details['response_text'] = response.text
+                details['headers'] = dict(response.headers)
+            except Exception:
+                pass
             self._record_github_error(details)
             return None
         except requests.exceptions.RequestException as e:
@@ -455,6 +510,7 @@ class GithubAPI:
                 'url': url,
                 'owner': owner,
                 'repo': repo,
+                'note': 'network/requests exception'
             }
             self._record_github_error(details)
             return None
