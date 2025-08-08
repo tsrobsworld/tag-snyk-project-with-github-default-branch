@@ -253,7 +253,7 @@ class SnykAPI:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            print(f"   ❌ Error fetching project details for project {project_id} with target {target_id}: {e}")
+            print(f"   ❌ Error fetching project details for project {target_id} with target {target_id}: {e}")
             return None
         
     def tag_project(self, org_id: str, project_id: str, tag_key: str, tag_value: str, existing_tags: List[Dict], owner_id: str, version: str = "2024-10-15", dry_run: bool = False) -> Optional[Dict]:
@@ -347,6 +347,18 @@ class GithubAPI:
             'Authorization': f'token {token}',
             'Accept': 'application/vnd.github.v3+json'
         })
+        # Store details of the last error for external consumers (e.g., error logger)
+        self.last_error_details: Optional[Dict] = None
+    
+    def _record_github_error(self, details: Dict) -> None:
+        """Record and print GitHub error details for diagnostics."""
+        self.last_error_details = details
+        status = details.get('status_code')
+        msg = details.get('message') or details.get('response_text') or details.get('exception')
+        if status:
+            print(f"   ❌ GitHub API error (status {status}) for {details.get('url')}: {str(msg)[:500]}")
+        else:
+            print(f"   ❌ GitHub API error for {details.get('url')}: {str(msg)[:500]}")
     
     def extract_repo_info_from_url(self, url: str) -> Optional[Dict[str, str]]:
         """
@@ -404,13 +416,51 @@ class GithubAPI:
         
         try:
             response = self.session.get(url)
-            response.raise_for_status()
+            # Capture non-200 responses with details without raising first
+            if response.status_code != 200:
+                details = {
+                    'status_code': response.status_code,
+                    'url': url,
+                    'owner': owner,
+                    'repo': repo,
+                }
+                try:
+                    details['response_text'] = response.text
+                    details['headers'] = dict(response.headers)
+                except Exception:
+                    pass
+                self._record_github_error(details)
+                return None
             data = response.json()
             return data.get('default_branch')
-        except requests.exceptions.RequestException as e:
-            print(f"   ❌ Error fetching default branch for {owner}/{repo}: {e}")
+        except requests.exceptions.HTTPError as e:
+            details = {
+                'exception': type(e).__name__,
+                'message': str(e),
+                'url': url,
+                'owner': owner,
+                'repo': repo,
+            }
+            if getattr(e, 'response', None) is not None:
+                details['status_code'] = e.response.status_code
+                try:
+                    details['response_text'] = e.response.text
+                    details['headers'] = dict(e.response.headers)
+                except Exception:
+                    pass
+            self._record_github_error(details)
             return None
-    
+        except requests.exceptions.RequestException as e:
+            details = {
+                'exception': type(e).__name__,
+                'message': str(e),
+                'url': url,
+                'owner': owner,
+                'repo': repo,
+            }
+            self._record_github_error(details)
+            return None
+
     def get_repository_info(self, url: str) -> Optional[Dict[str, str]]:
         """
         Get repository information including default branch.
@@ -635,10 +685,16 @@ def main():
                             print(f"   ⚠️  No project details available for target")
                     else:
                         # Log GitHub API errors
+                        gh_details = github_api.last_error_details or {}
                         error_details = {
                             'target_url': target_url,
                             'error': 'Could not extract repository information'
                         }
+                        # Merge any captured GitHub details (status_code, response_text, headers, url, owner, repo)
+                        try:
+                            error_details.update(gh_details)
+                        except Exception:
+                            pass
                         error_logger.log_error(
                             'github_api_error',
                             error_details,
