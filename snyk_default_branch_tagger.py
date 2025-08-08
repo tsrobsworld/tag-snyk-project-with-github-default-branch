@@ -313,7 +313,6 @@ class SnykAPI:
                 "attributes": {
                     "tags": updated_tags
                 },
-                "id": owner_id,
                 "relationships": {
                     "owner": {
                         "data": {
@@ -321,8 +320,7 @@ class SnykAPI:
                             "type": "user"
                         }
                     }
-                },
-                "type": "project"
+                }
             }
         }
         
