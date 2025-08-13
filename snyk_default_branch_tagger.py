@@ -546,7 +546,7 @@ def main():
     parser.add_argument("--region", required=False, default="SNYK-US-01", help="Snyk region")
     parser.add_argument("--dry-run", action="store_true", help="Dry run mode")
     parser.add_argument("--key", required=True, help="Tag key for default branch Snyk projects")
-    parser.add_argument("--value", required=True, help="Tag value for default branch Snyk projects")
+    parser.add_argument("--value", required=False, help="Tag value for default branch Snyk projects (defaults to the actual default branch name if not specified)")
     parser.add_argument("--integration-type", required=True, nargs='+', 
                        help="Integration type(s) for Snyk projects. Valid types: github, github-enterprise, github-cloud-app. "
                             "You can specify multiple types by separating them with spaces. Example: --integration-type github github-enterprise")
@@ -675,13 +675,16 @@ def main():
                                             print(f"   ❌ Skipping project {project_id} - missing owner ID and no fallback available")
                                             continue
                                     
+                                    # Use the provided value argument if specified, otherwise use the default branch name
+                                    tag_value = args.value if args.value is not None else repo_info['default_branch']
+                                    
                                     # Tag the project with default branch information
                                     try:
                                         result = snyk_api.tag_project(
                                             org_id=org['id'],
                                             project_id=project_id,
                                             tag_key=args.key,
-                                            tag_value=repo_info['default_branch'],
+                                            tag_value=tag_value,
                                             existing_tags=existing_tags,
                                             owner_id=owner_id,
                                             dry_run=args.dry_run
@@ -703,7 +706,7 @@ def main():
                                             'error': str(e),
                                             'project_id': project_id,
                                             'tag_key': args.key,
-                                            'tag_value': repo_info['default_branch']
+                                            'tag_value': tag_value
                                         }
                                         error_logger.log_error(
                                             'tagging_api_error',

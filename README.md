@@ -80,7 +80,7 @@ python snyk_default_branch_tagger.py --integration-type github --key default-bra
 |----------|----------|---------|-------------|
 | `--integration-type` | Yes | - | Integration type(s): github, github-enterprise, github-cloud-app |
 | `--key` | Yes | - | Tag key for default branch projects |
-| `--value` | Yes | - | Tag value for default branch projects |
+| `--value` | No | Default branch name | Tag value for default branch projects (optional) |
 | `--region` | No | SNYK-US-01 | Snyk region (SNYK-US-01, SNYK-US-02, SNYK-EU-01, SNYK-AU-01) |
 | `--github-base-url` | No | https://api.github.com | GitHub API base URL |
 | `--group-id` | No | - | Snyk group ID to filter organizations |
@@ -112,6 +112,9 @@ python snyk_default_branch_tagger.py --integration-type github --key default-bra
   - Updates existing tags if values are wrong
   - Preserves all other existing tags
   - Skips if tag already exists with correct value
+- **Tag Value Logic**:
+  - If `--value` is provided, uses that value
+  - If `--value` is not provided, uses the actual default branch name from GitHub
 
 ### **5. Error Handling**
 - **Fallback User ID**: Uses authenticated user's ID when project owner ID is missing
